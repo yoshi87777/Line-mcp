@@ -4,7 +4,10 @@
   "type": "module",
   "scripts": {
     "start": "node webhook-server.js",
-    "dev": "NODE_ENV=development node webhook-server.js"
+    "dev": "NODE_ENV=development node webhook-server.js",
+    "send-unreplied": "node send-unreplied.js",
+    "send-unreplied:dry": "node send-unreplied.js --dry-run",
+    "parse-logs": "node parse-render-logs.js"
   },
   "dependencies": {
     "@google/genai": "^1.50.0",

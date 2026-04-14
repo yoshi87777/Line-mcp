@@ -3,6 +3,8 @@ import { middleware } from '@line/bot-sdk';
 import { GoogleGenAI } from '@google/genai';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
 
 dotenv.config();
 
@@ -19,6 +21,24 @@ const GEMINI_KEYS = [
 const GEMINI_MODEL = 'gemini-2.5-flash';
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
+
+// Persist unreplied messages so they can be pushed later via send-unreplied.js.
+// Render free/starter tier has ephemeral FS, so we ALSO emit a structured log line
+// `[UNREPLIED] {json}` that can be recovered from Render log exports via parse-render-logs.js.
+const DATA_DIR = process.env.DATA_DIR || './data';
+const UNREPLIED_FILE = path.join(DATA_DIR, 'unreplied.jsonl');
+
+function recordUnreplied(entry) {
+  const record = { timestamp: new Date().toISOString(), ...entry };
+  // Structured log line — always emitted, survives FS wipes on Render.
+  console.log(`[UNREPLIED] ${JSON.stringify(record)}`);
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.appendFileSync(UNREPLIED_FILE, JSON.stringify(record) + '\n');
+  } catch (err) {
+    console.error('Failed to write unreplied record to disk:', err.message);
+  }
+}
 
 // LINE middleware for signature validation
 app.use(
@@ -118,10 +138,31 @@ async function handleTextMessage(event) {
   const geminiResponse = await callGemini(userMessage);
 
   if (geminiResponse) {
-    await replyLine(replyToken, geminiResponse);
-    console.log(`[${userId}] Gemini: ${geminiResponse}`);
+    try {
+      await replyLine(replyToken, geminiResponse);
+      console.log(`[${userId}] Gemini: ${geminiResponse}`);
+    } catch (err) {
+      // Reply failed (e.g. replyToken expired, network) — record so we can push later.
+      recordUnreplied({
+        userId,
+        userMessage,
+        reason: 'reply_failed',
+        error: err.message,
+        aiResponse: geminiResponse,
+      });
+    }
   } else {
-    await replyLine(replyToken, 'AIが応答できませんでした。もう一度試してください。');
+    // Gemini produced no response — record the original user message so we can retry later.
+    recordUnreplied({
+      userId,
+      userMessage,
+      reason: 'gemini_failed',
+    });
+    try {
+      await replyLine(replyToken, 'AIが応答できませんでした。もう一度試してください。');
+    } catch (err) {
+      console.error('Fallback reply also failed:', err.message);
+    }
   }
 }
 
