@@ -34,7 +34,7 @@ app.post('/webhook', (req, res) => {
 
   Promise.all(
     events.map((event) => {
-      console.log('Event type:', event.type, event.message?.type);
+      console.log('Event:', JSON.stringify(event.source, null, 2));
       if (event.type === 'message' && event.message.type === 'text') {
         return handleTextMessage(event);
       }

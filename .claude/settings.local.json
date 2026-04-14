@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:zenn.dev)",
+      "WebSearch",
+      "mcp__line-bot__push_text_message"
+    ]
+  }
+}
