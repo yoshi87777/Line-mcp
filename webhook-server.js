@@ -168,15 +168,37 @@ async function pushLine(to, text) {
   console.log(`Push sent to ${to}`);
 }
 
-// Resolve LINE user ID → ARIA user ID (returns null if not registered)
+// Resolve LINE user ID → ARIA user ID (auto-creates if not registered)
 async function getAriaUserId(lineUserId) {
-  const { data, error } = await supabase
+  // Try to find existing user
+  const { data: existing } = await supabase
     .from('users')
     .select('id')
     .eq('line_user_id', lineUserId)
     .single();
-  if (error || !data) return null;
-  return data.id;
+
+  if (existing) return existing.id;
+
+  // Auto-create new user for this LINE ID
+  const { data: created, error } = await supabase
+    .from('users')
+    .insert({
+      name: `LINE_${lineUserId.slice(0, 8)}`,
+      email: `line_${lineUserId}@aria-nova.xyz`,
+      password_hash: '',
+      line_user_id: lineUserId,
+      is_active: true,
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('Failed to auto-create user:', error.message);
+    return null;
+  }
+
+  console.log(`Auto-created ARIA user ${created.id} for LINE ID ${lineUserId}`);
+  return created.id;
 }
 
 // Handle commands from Yoshiki's DM
