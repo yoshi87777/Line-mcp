@@ -264,71 +264,7 @@ async function handleCommand(replyToken, lineUserId, userMessage) {
   const ariaUserId = ariaUser.id;
   console.log(`[Command] ariaUserId=${ariaUserId} message="${userMessage}"`);
 
-  // ── タスク一覧 ──
-  if (/タスク.*(一覧|リスト|確認|見せて)/.test(userMessage)) {
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('id, title, status, due_date')
-      .eq('created_by', ariaUserId)
-      .not('status', 'in', '("done","archived")')
-      .order('priority_score', { ascending: false })
-      .limit(10);
-
-    if (error || !data?.length) {
-      await replyLine(replyToken, 'タスクはないで！');
-      return;
-    }
-
-    const list = data.map((t, i) => {
-      const due = t.due_date ? ` (${t.due_date})` : '';
-      return `${i + 1}. [${t.id}] ${t.title}${due}`;
-    }).join('\n');
-    await replyLine(replyToken, `📋 タスク一覧:\n${list}`);
-    return;
-  }
-
-  // ── タスク追加 ──
-  const addMatch = userMessage.match(/タスク(?:追加|登録|作成)[：: ]\s*(.+)/s);
-  if (addMatch) {
-    const title = addMatch[1].trim();
-    const { error } = await supabase.from('tasks').insert({
-      title,
-      status: 'backlog',
-      created_by: ariaUserId,
-      source: 'line',
-    });
-    if (error) {
-      await replyLine(replyToken, `追加失敗: ${error.message}`);
-    } else {
-      await replyLine(replyToken, `「${title}」追加したで！`);
-    }
-    return;
-  }
-
-  // ── タスク完了 ──
-  const doneMatch = userMessage.match(/タスク(?:完了|終わった|done)[：: ]?\s*(\d+)/);
-  if (doneMatch) {
-    const taskId = parseInt(doneMatch[1]);
-    // Verify ownership before updating
-    const { data: task } = await supabase
-      .from('tasks')
-      .select('id')
-      .eq('id', taskId)
-      .eq('created_by', ariaUserId)
-      .single();
-
-    if (!task) {
-      await replyLine(replyToken, 'そのタスクは見つからへんかった。');
-      return;
-    }
-
-    await supabase.from('tasks').update({ status: 'done', completed_at: new Date().toISOString() })
-      .eq('id', taskId);
-    await replyLine(replyToken, `タスク[${taskId}]完了したで！`);
-    return;
-  }
-
-  // ── メッセージ送信 ──
+  // ── LINEメッセージ送信だけ特殊処理（ARIAには届かない操作） ──
   const sendMatch = userMessage.match(/(.+?)(?:に(?:メッセージを)?送って)[：: ]\s*(.+)/s);
   if (sendMatch) {
     const targetName = sendMatch[1].trim().toLowerCase();
@@ -346,18 +282,14 @@ async function handleCommand(replyToken, lineUserId, userMessage) {
     return;
   }
 
-  // ── その他は ARIA会話エンジンへ ──
+  // ── それ以外は全部ARIAに任せる ──
   const ariaReply = await callAriaChat(userMessage);
   if (ariaReply) {
     await replyLine(replyToken, ariaReply);
   } else {
-    await replyLine(replyToken,
-      '使い方:\n' +
-      '・タスク一覧\n' +
-      '・タスク追加: 〇〇\n' +
-      '・タスク完了: [ID]\n' +
-      '・Popcornに送って: メッセージ'
-    );
+    const history = await getHistory(ariaUserId.toString());
+    const geminiReply = await callGemini(userMessage, history);
+    await replyLine(replyToken, geminiReply || 'ただいま応答できません。');
   }
 }
 
