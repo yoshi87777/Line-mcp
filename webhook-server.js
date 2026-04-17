@@ -99,18 +99,11 @@ async function getHistory(sourceId) {
 async function callGemini(userMessage, history) {
   const systemPrompt = `あなたは親切で有用なアシスタントです。日本語で簡潔に回答してください。`;
 
-  // Build history string for context
-  let contextText = '';
-  if (history.length > 0) {
-    contextText = '\n\n過去の会話履歴:\n';
-    for (const h of history) {
-      const label = h.role === 'user' ? 'ユーザー' : 'アシスタント';
-      contextText += `${label}: ${h.message}\n`;
-    }
-    contextText += '\n上記の履歴を踏まえて回答してください。';
-  }
-
-  const fullMessage = userMessage + contextText;
+  // Build proper Gemini chat history (role must be 'user' or 'model')
+  const chatHistory = history.map((h) => ({
+    role: h.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: h.message }],
+  }));
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     for (const key of GEMINI_KEYS) {
@@ -124,8 +117,9 @@ async function callGemini(userMessage, history) {
             temperature: 0.7,
             maxOutputTokens: 1024,
           },
+          history: chatHistory,
         });
-        const response = await chat.sendMessage({ message: fullMessage });
+        const response = await chat.sendMessage({ message: userMessage });
         const text = response.text?.trim();
         if (text) {
           console.log(`Gemini OK (attempt ${attempt + 1}, ${text.length} chars)`);
