@@ -28,6 +28,16 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 const HISTORY_LIMIT = 20; // number of past messages to include as context
 
+// Yoshiki's user ID — messages from this ID in DM are treated as commands
+const YOSHIKI_USER_ID = process.env.DESTINATION_USER_ID;
+
+// Contact name → LINE ID mapping (add more as needed)
+const CONTACTS = {
+  'popcorn': 'Cb3bc41ff3a128369d5736430d040a590',
+  'なかにしよグループ': 'Cb3bc41ff3a128369d5736430d040a590',
+  'グループ': 'Cb3bc41ff3a128369d5736430d040a590',
+};
+
 // LINE middleware for signature validation
 app.use(
   middleware({
@@ -144,6 +154,47 @@ async function callGemini(userMessage, history) {
   return null;
 }
 
+async function pushLine(to, text) {
+  await axios.post(
+    'https://api.line.me/v2/bot/message/push',
+    { to, messages: [{ type: 'text', text }] },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${channelAccessToken}`,
+      },
+    }
+  );
+  console.log(`Push sent to ${to}`);
+}
+
+// Handle commands from Yoshiki's DM
+async function handleCommand(replyToken, userMessage) {
+  // "〇〇にメッセージを送って: [content]" or "〇〇に送って [content]"
+  const sendMatch = userMessage.match(/(.+?)(?:に(?:メッセージを)?送って)[：: ]\s*(.+)/s);
+
+  if (sendMatch) {
+    const targetName = sendMatch[1].trim().toLowerCase();
+    const messageToSend = sendMatch[2].trim();
+
+    const entry = Object.entries(CONTACTS).find(([name]) =>
+      targetName.includes(name) || name.includes(targetName)
+    );
+
+    if (entry) {
+      await pushLine(entry[1], messageToSend);
+      await replyLine(replyToken, `${entry[0]}に送ったで！`);
+    } else {
+      const available = Object.keys(CONTACTS).join(', ');
+      await replyLine(replyToken, `「${targetName}」が見つからへんかった。登録済み: ${available}`);
+    }
+    return;
+  }
+
+  // Unknown command
+  await replyLine(replyToken, '使い方: 「Popcornに送って: メッセージ内容」');
+}
+
 async function replyLine(replyToken, text) {
   await axios.post(
     'https://api.line.me/v2/bot/message/reply',
@@ -168,6 +219,12 @@ async function handleTextMessage(event) {
   const userMessage = message.text;
 
   console.log(`[${sourceId}] User: ${userMessage}`);
+
+  // If Yoshiki sends a DM, treat as command
+  if (source.type === 'user' && userId === YOSHIKI_USER_ID) {
+    console.log('[Command mode] Yoshiki DM detected');
+    return handleCommand(replyToken, userMessage);
+  }
 
   // Get conversation history
   const history = await getHistory(sourceId);
