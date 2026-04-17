@@ -212,17 +212,78 @@ async function handleCommand(replyToken, lineUserId, userMessage) {
   }
   console.log(`[Command] ariaUserId=${ariaUserId} message="${userMessage}"`);
 
-  // "〇〇にメッセージを送って: [content]" or "〇〇に送って [content]"
-  const sendMatch = userMessage.match(/(.+?)(?:に(?:メッセージを)?送って)[：: ]\s*(.+)/s);
+  // ── タスク一覧 ──
+  if (/タスク.*(一覧|リスト|確認|見せて)/.test(userMessage)) {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('id, title, status, due_date')
+      .eq('created_by', ariaUserId)
+      .not('status', 'in', '("done","archived")')
+      .order('priority_score', { ascending: false })
+      .limit(10);
 
+    if (error || !data?.length) {
+      await replyLine(replyToken, 'タスクはないで！');
+      return;
+    }
+
+    const list = data.map((t, i) => {
+      const due = t.due_date ? ` (${t.due_date})` : '';
+      return `${i + 1}. [${t.id}] ${t.title}${due}`;
+    }).join('\n');
+    await replyLine(replyToken, `📋 タスク一覧:\n${list}`);
+    return;
+  }
+
+  // ── タスク追加 ──
+  const addMatch = userMessage.match(/タスク(?:追加|登録|作成)[：: ]\s*(.+)/s);
+  if (addMatch) {
+    const title = addMatch[1].trim();
+    const { error } = await supabase.from('tasks').insert({
+      title,
+      status: 'backlog',
+      created_by: ariaUserId,
+      source: 'line',
+    });
+    if (error) {
+      await replyLine(replyToken, `追加失敗: ${error.message}`);
+    } else {
+      await replyLine(replyToken, `「${title}」追加したで！`);
+    }
+    return;
+  }
+
+  // ── タスク完了 ──
+  const doneMatch = userMessage.match(/タスク(?:完了|終わった|done)[：: ]?\s*(\d+)/);
+  if (doneMatch) {
+    const taskId = parseInt(doneMatch[1]);
+    // Verify ownership before updating
+    const { data: task } = await supabase
+      .from('tasks')
+      .select('id')
+      .eq('id', taskId)
+      .eq('created_by', ariaUserId)
+      .single();
+
+    if (!task) {
+      await replyLine(replyToken, 'そのタスクは見つからへんかった。');
+      return;
+    }
+
+    await supabase.from('tasks').update({ status: 'done', completed_at: new Date().toISOString() })
+      .eq('id', taskId);
+    await replyLine(replyToken, `タスク[${taskId}]完了したで！`);
+    return;
+  }
+
+  // ── メッセージ送信 ──
+  const sendMatch = userMessage.match(/(.+?)(?:に(?:メッセージを)?送って)[：: ]\s*(.+)/s);
   if (sendMatch) {
     const targetName = sendMatch[1].trim().toLowerCase();
     const messageToSend = sendMatch[2].trim();
-
     const entry = Object.entries(CONTACTS).find(([name]) =>
       targetName.includes(name) || name.includes(targetName)
     );
-
     if (entry) {
       await pushLine(entry[1], messageToSend);
       await replyLine(replyToken, `${entry[0]}に送ったで！`);
@@ -233,8 +294,14 @@ async function handleCommand(replyToken, lineUserId, userMessage) {
     return;
   }
 
-  // Unknown command — show help
-  await replyLine(replyToken, '使い方: 「Popcornに送って: メッセージ内容」');
+  // ── ヘルプ ──
+  await replyLine(replyToken,
+    '使い方:\n' +
+    '・タスク一覧\n' +
+    '・タスク追加: 〇〇\n' +
+    '・タスク完了: [ID]\n' +
+    '・Popcornに送って: メッセージ'
+  );
 }
 
 async function replyLine(replyToken, text) {
