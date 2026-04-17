@@ -38,6 +38,10 @@ const CONTACTS = {
   'グループ': 'Cb3bc41ff3a128369d5736430d040a590',
 };
 
+// ARIA API (on same VPS, port 8000)
+const ARIA_API_URL = 'http://127.0.0.1:8000';
+const ARIA_API_TOKEN = process.env.ARIA_API_TOKEN || 'aria-mobile-2026';
+
 // LINE middleware for signature validation
 app.use(
   middleware({
@@ -106,6 +110,32 @@ async function getHistory(sourceId) {
   return (data || []).reverse();
 }
 
+// Call ARIA conversation API (primary)
+async function callAriaChat(userMessage) {
+  try {
+    const res = await axios.post(
+      `${ARIA_API_URL}/chat`,
+      { message: userMessage },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'ARIA-TOKEN': ARIA_API_TOKEN,
+        },
+        timeout: 30000,
+      }
+    );
+    const reply = res.data?.reply?.trim();
+    if (reply) {
+      console.log(`ARIA chat OK (${reply.length} chars)`);
+      return reply;
+    }
+  } catch (err) {
+    console.error('ARIA chat error:', err.message);
+  }
+  return null;
+}
+
+// Gemini fallback
 async function callGemini(userMessage, history) {
   const systemPrompt = `あなたは親切で有用なアシスタントです。自然な関西弁（軽め）で簡潔に回答してください。ネイティブの関西人が普段使う程度のニュアンスで、語尾に「〜やな」「〜やで」「〜やん」などを自然に混ぜる程度にしてください。強調しすぎないようにしてください。`;
 
@@ -294,14 +324,19 @@ async function handleCommand(replyToken, lineUserId, userMessage) {
     return;
   }
 
-  // ── ヘルプ ──
-  await replyLine(replyToken,
-    '使い方:\n' +
-    '・タスク一覧\n' +
-    '・タスク追加: 〇〇\n' +
-    '・タスク完了: [ID]\n' +
-    '・Popcornに送って: メッセージ'
-  );
+  // ── その他は ARIA会話エンジンへ ──
+  const ariaReply = await callAriaChat(userMessage);
+  if (ariaReply) {
+    await replyLine(replyToken, ariaReply);
+  } else {
+    await replyLine(replyToken,
+      '使い方:\n' +
+      '・タスク一覧\n' +
+      '・タスク追加: 〇〇\n' +
+      '・タスク完了: [ID]\n' +
+      '・Popcornに送って: メッセージ'
+    );
+  }
 }
 
 async function replyLine(replyToken, text) {
@@ -335,20 +370,20 @@ async function handleTextMessage(event) {
     return handleCommand(replyToken, userId, userMessage);
   }
 
-  // Get conversation history
-  const history = await getHistory(sourceId);
-
   // Save user message
   await saveMessage(sourceId, source.type, 'user', userMessage);
 
-  // Call Gemini with history context
-  const geminiResponse = await callGemini(userMessage, history);
+  // Try ARIA chat first, fall back to Gemini
+  let aiResponse = await callAriaChat(userMessage);
+  if (!aiResponse) {
+    const history = await getHistory(sourceId);
+    aiResponse = await callGemini(userMessage, history);
+  }
 
-  if (geminiResponse) {
-    await replyLine(replyToken, geminiResponse);
-    // Save assistant response
-    await saveMessage(sourceId, source.type, 'assistant', geminiResponse);
-    console.log(`[${sourceId}] Gemini: ${geminiResponse}`);
+  if (aiResponse) {
+    await replyLine(replyToken, aiResponse);
+    await saveMessage(sourceId, source.type, 'assistant', aiResponse);
+    console.log(`[${sourceId}] AI: ${aiResponse}`);
   } else {
     await replyLine(replyToken, 'AIが応答できませんでした。もう一度試してください。');
   }
