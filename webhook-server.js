@@ -136,8 +136,8 @@ async function callAriaChat(userMessage) {
 }
 
 // Gemini fallback
-async function callGemini(userMessage, history) {
-  const systemPrompt = `あなたは親切で有用なアシスタントです。自然な関西弁（軽め）で簡潔に回答してください。ネイティブの関西人が普段使う程度のニュアンスで、語尾に「〜やな」「〜やで」「〜やん」などを自然に混ぜる程度にしてください。強調しすぎないようにしてください。`;
+async function callGemini(userMessage, history, systemPrompt = null) {
+  systemPrompt = systemPrompt || `あなたは親切で有用なアシスタントです。自然な関西弁（軽め）で簡潔に回答してください。ネイティブの関西人が普段使う程度のニュアンスで、語尾に「〜やな」「〜やで」「〜やん」などを自然に混ぜる程度にしてください。強調しすぎないようにしてください。`;
 
   // Build proper Gemini chat history (role must be 'user' or 'model')
   const chatHistory = history.map((h) => ({
@@ -198,18 +198,17 @@ async function pushLine(to, text) {
   console.log(`Push sent to ${to}`);
 }
 
-// Resolve LINE user ID → ARIA user ID (auto-creates if not registered)
-async function getAriaUserId(lineUserId) {
-  // Try to find existing user
+// Resolve LINE user ID → { id, line_command_enabled } (auto-creates if not registered)
+async function getAriaUser(lineUserId) {
   const { data: existing } = await supabase
     .from('users')
-    .select('id')
+    .select('id, line_command_enabled')
     .eq('line_user_id', lineUserId)
     .single();
 
-  if (existing) return existing.id;
+  if (existing) return existing;
 
-  // Auto-create new user for this LINE ID
+  // Auto-create new user (command disabled by default)
   const { data: created, error } = await supabase
     .from('users')
     .insert({
@@ -218,8 +217,9 @@ async function getAriaUserId(lineUserId) {
       password_hash: '',
       line_user_id: lineUserId,
       is_active: true,
+      line_command_enabled: false,
     })
-    .select('id')
+    .select('id, line_command_enabled')
     .single();
 
   if (error) {
@@ -228,18 +228,40 @@ async function getAriaUserId(lineUserId) {
   }
 
   console.log(`Auto-created ARIA user ${created.id} for LINE ID ${lineUserId}`);
-  return created.id;
+  return created;
 }
 
-// Handle commands from Yoshiki's DM
+// Secretary conversation for non-linked users
+async function handleSecretaryChat(replyToken, userMessage) {
+  const secretaryPrompt = `あなたはYoshikiの個人秘書「ARIA」です。以下を厳守してください。
+
+【口調・品位】
+- 丁寧で落ち着いた日本語で話す。関西弁は使わない
+- Yoshikiの品位・評判を傷つけるような発言は絶対にしない
+- 曖昧・軽率な返答を避け、誠実かつプロフェッショナルに対応する
+
+【対応方針】
+- 食事・飲み会・ディナーなどの誘いは「Yoshikiのスケジュールを確認の上、折り返しご連絡いたします」と伝え、日時・場所の詳細を確認する
+- 日時が決まった場合はスケジュールに登録し、確認済みと伝える
+- 伝言・要件は「Yoshikiにお伝えいたします」と答える
+- 答えられない・判断できない場合は「Yoshikiに確認してご連絡いたします」と伝える`;
+
+  // ARIA /chat has full scheduling capability
+  const reply = await callAriaChat(userMessage)
+    || await callGemini(userMessage, [], secretaryPrompt);
+  await replyLine(replyToken, reply || 'ただいま対応できません。');
+}
+
+// Handle commands from linked users' DM
 async function handleCommand(replyToken, lineUserId, userMessage) {
-  // Verify the LINE user is registered and get ARIA user ID
-  const ariaUserId = await getAriaUserId(lineUserId);
-  if (!ariaUserId) {
-    await replyLine(replyToken, 'このLINEアカウントは登録されていません。アクセスできません。');
-    console.warn(`Unregistered LINE user attempted command: ${lineUserId}`);
-    return;
+  const ariaUser = await getAriaUser(lineUserId);
+
+  // Not linked → secretary mode
+  if (!ariaUser || !ariaUser.line_command_enabled) {
+    return handleSecretaryChat(replyToken, userMessage);
   }
+
+  const ariaUserId = ariaUser.id;
   console.log(`[Command] ariaUserId=${ariaUserId} message="${userMessage}"`);
 
   // ── タスク一覧 ──
