@@ -168,8 +168,28 @@ async function pushLine(to, text) {
   console.log(`Push sent to ${to}`);
 }
 
+// Resolve LINE user ID → ARIA user ID (returns null if not registered)
+async function getAriaUserId(lineUserId) {
+  const { data, error } = await supabase
+    .from('users')
+    .select('id')
+    .eq('line_user_id', lineUserId)
+    .single();
+  if (error || !data) return null;
+  return data.id;
+}
+
 // Handle commands from Yoshiki's DM
-async function handleCommand(replyToken, userMessage) {
+async function handleCommand(replyToken, lineUserId, userMessage) {
+  // Verify the LINE user is registered and get ARIA user ID
+  const ariaUserId = await getAriaUserId(lineUserId);
+  if (!ariaUserId) {
+    await replyLine(replyToken, 'このLINEアカウントは登録されていません。アクセスできません。');
+    console.warn(`Unregistered LINE user attempted command: ${lineUserId}`);
+    return;
+  }
+  console.log(`[Command] ariaUserId=${ariaUserId} message="${userMessage}"`);
+
   // "〇〇にメッセージを送って: [content]" or "〇〇に送って [content]"
   const sendMatch = userMessage.match(/(.+?)(?:に(?:メッセージを)?送って)[：: ]\s*(.+)/s);
 
@@ -191,7 +211,7 @@ async function handleCommand(replyToken, userMessage) {
     return;
   }
 
-  // Unknown command
+  // Unknown command — show help
   await replyLine(replyToken, '使い方: 「Popcornに送って: メッセージ内容」');
 }
 
@@ -220,10 +240,10 @@ async function handleTextMessage(event) {
 
   console.log(`[${sourceId}] User: ${userMessage}`);
 
-  // If Yoshiki sends a DM, treat as command
-  if (source.type === 'user' && userId === YOSHIKI_USER_ID) {
-    console.log('[Command mode] Yoshiki DM detected');
-    return handleCommand(replyToken, userMessage);
+  // If message is a DM (not group), check if it's a registered command user
+  if (source.type === 'user') {
+    console.log('[Command mode] DM detected');
+    return handleCommand(replyToken, userId, userMessage);
   }
 
   // Get conversation history
