@@ -115,7 +115,7 @@ async function callAriaChat(userMessage) {
   try {
     const res = await axios.post(
       `${ARIA_API_URL}/chat`,
-      { message: userMessage },
+      { message: userMessage, context: '必ず日本語で回答してください。' },
       {
         headers: {
           'Content-Type': 'application/json',
