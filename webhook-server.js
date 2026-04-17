@@ -54,20 +54,18 @@ app.post('/webhook', (req, res) => {
   const events = req.body.events;
   console.log(`Received ${events.length} events`);
 
-  Promise.all(
-    events.map((event) => {
-      console.log('Event:', JSON.stringify(event.source, null, 2));
-      if (event.type === 'message' && event.message.type === 'text') {
-        return handleTextMessage(event);
-      }
-      return Promise.resolve();
-    })
-  )
-    .then(() => res.json({ success: true }))
-    .catch((err) => {
-      console.error('Error:', err.message);
-      res.status(500).send('Internal Server Error');
-    });
+  // Respond immediately so LINE doesn't timeout and retry
+  res.json({ success: true });
+
+  // Process events asynchronously
+  events.forEach((event) => {
+    console.log('Event:', JSON.stringify(event.source, null, 2));
+    if (event.type === 'message' && event.message.type === 'text') {
+      handleTextMessage(event).catch((err) =>
+        console.error('handleTextMessage error:', err.message)
+      );
+    }
+  });
 });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
