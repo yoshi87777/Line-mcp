@@ -97,7 +97,7 @@ async function getHistory(sourceId) {
 }
 
 async function callGemini(userMessage, history) {
-  const systemPrompt = `あなたは親切で有用なアシスタントです。日本語で簡潔に回答してください。`;
+  const systemPrompt = `あなたは親切で有用なアシスタントです。関西弁で簡潔に回答してください。`;
 
   // Build proper Gemini chat history (role must be 'user' or 'model')
   const chatHistory = history.map((h) => ({
