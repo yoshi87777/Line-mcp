@@ -1,6 +1,7 @@
 import express from 'express';
 import { middleware } from '@line/bot-sdk';
 import { GoogleGenAI } from '@google/genai';
+import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
 import dotenv from 'dotenv';
 
@@ -11,7 +12,13 @@ const app = express();
 const channelAccessToken = process.env.CHANNEL_ACCESS_TOKEN;
 const channelSecret = process.env.CHANNEL_SECRET;
 
-// Gemini keys rotation (same approach as ARIA)
+// Supabase client
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+// Gemini keys rotation
 const GEMINI_KEYS = [
   process.env.GEMINI_API_KEY,
   ...process.env.GEMINI_API_KEYS_EXTRA?.split(',').filter(Boolean) || [],
@@ -19,6 +26,7 @@ const GEMINI_KEYS = [
 const GEMINI_MODEL = 'gemini-2.5-flash';
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
+const HISTORY_LIMIT = 20; // number of past messages to include as context
 
 // LINE middleware for signature validation
 app.use(
@@ -50,8 +58,59 @@ app.post('/webhook', (req, res) => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function callGemini(userMessage) {
+// Get source ID (group ID or user ID)
+function getSourceId(source) {
+  if (source.type === 'group') return source.groupId;
+  if (source.type === 'room') return source.roomId;
+  return source.userId;
+}
+
+// Save a message to Supabase
+async function saveMessage(sourceId, sourceType, role, message) {
+  const { error } = await supabase.from('line_conversations').insert({
+    source_id: sourceId,
+    source_type: sourceType,
+    role,
+    message,
+  });
+  if (error) {
+    console.error('Supabase insert error:', error.message);
+  }
+}
+
+// Get conversation history from Supabase
+async function getHistory(sourceId) {
+  const { data, error } = await supabase
+    .from('line_conversations')
+    .select('role, message')
+    .eq('source_id', sourceId)
+    .order('created_at', { ascending: false })
+    .limit(HISTORY_LIMIT);
+
+  if (error) {
+    console.error('Supabase select error:', error.message);
+    return [];
+  }
+
+  // Return in chronological order
+  return (data || []).reverse();
+}
+
+async function callGemini(userMessage, history) {
   const systemPrompt = `あなたは親切で有用なアシスタントです。日本語で簡潔に回答してください。`;
+
+  // Build history string for context
+  let contextText = '';
+  if (history.length > 0) {
+    contextText = '\n\n過去の会話履歴:\n';
+    for (const h of history) {
+      const label = h.role === 'user' ? 'ユーザー' : 'アシスタント';
+      contextText += `${label}: ${h.message}\n`;
+    }
+    contextText += '\n上記の履歴を踏まえて回答してください。';
+  }
+
+  const fullMessage = userMessage + contextText;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     for (const key of GEMINI_KEYS) {
@@ -66,7 +125,7 @@ async function callGemini(userMessage) {
             maxOutputTokens: 1024,
           },
         });
-        const response = await chat.sendMessage({ message: userMessage });
+        const response = await chat.sendMessage({ message: fullMessage });
         const text = response.text?.trim();
         if (text) {
           console.log(`Gemini OK (attempt ${attempt + 1}, ${text.length} chars)`);
@@ -109,17 +168,27 @@ async function replyLine(replyToken, text) {
 }
 
 async function handleTextMessage(event) {
-  const { replyToken, message } = event;
-  const userId = event.source.userId;
+  const { replyToken, message, source } = event;
+  const userId = source.userId;
+  const sourceId = getSourceId(source);
   const userMessage = message.text;
 
-  console.log(`[${userId}] User: ${userMessage}`);
+  console.log(`[${sourceId}] User: ${userMessage}`);
 
-  const geminiResponse = await callGemini(userMessage);
+  // Get conversation history
+  const history = await getHistory(sourceId);
+
+  // Save user message
+  await saveMessage(sourceId, source.type, 'user', userMessage);
+
+  // Call Gemini with history context
+  const geminiResponse = await callGemini(userMessage, history);
 
   if (geminiResponse) {
     await replyLine(replyToken, geminiResponse);
-    console.log(`[${userId}] Gemini: ${geminiResponse}`);
+    // Save assistant response
+    await saveMessage(sourceId, source.type, 'assistant', geminiResponse);
+    console.log(`[${sourceId}] Gemini: ${geminiResponse}`);
   } else {
     await replyLine(replyToken, 'AIが応答できませんでした。もう一度試してください。');
   }
