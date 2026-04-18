@@ -109,19 +109,31 @@ async function getHistory(sourceId) {
 }
 
 // Call ARIA conversation API (primary)
-async function callAriaChat(userMessage) {
+// sessionId identifies the conversation (LINE userId / groupId / roomId or ARIA user id)
+// so ARIA can maintain per-source conversation memory across turns.
+async function callAriaChat(userMessage, sessionId = null, history = []) {
   try {
-    const res = await axios.post(
-      `${ARIA_API_URL}/chat`,
-      { message: userMessage, context: '必ず日本語で回答してください。' },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'ARIA-TOKEN': ARIA_API_TOKEN,
-        },
-        timeout: 30000,
-      }
-    );
+    const payload = {
+      message: userMessage,
+      context: '必ず日本語で回答してください。',
+    };
+    if (sessionId) {
+      payload.user_id = sessionId;
+      payload.session_id = sessionId;
+    }
+    if (history.length) {
+      payload.history = history.map((h) => ({
+        role: h.role === 'assistant' ? 'assistant' : 'user',
+        content: h.message,
+      }));
+    }
+    const res = await axios.post(`${ARIA_API_URL}/chat`, payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        'ARIA-TOKEN': ARIA_API_TOKEN,
+      },
+      timeout: 30000,
+    });
     const reply = res.data?.reply?.trim();
     if (reply) {
       console.log(`ARIA chat OK (${reply.length} chars)`);
@@ -230,7 +242,7 @@ async function getAriaUser(lineUserId) {
 }
 
 // Secretary conversation for non-linked users
-async function handleSecretaryChat(replyToken, userMessage) {
+async function handleSecretaryChat(replyToken, sourceId, sourceType, userMessage) {
   const secretaryPrompt = `あなたはYoshikiの個人秘書「ARIA」です。以下を厳守してください。
 
 【口調・品位】
@@ -244,10 +256,18 @@ async function handleSecretaryChat(replyToken, userMessage) {
 - 伝言・要件は「Yoshikiにお伝えいたします」と答える
 - 答えられない・判断できない場合は「Yoshikiに確認してご連絡いたします」と伝える`;
 
-  // ARIA /chat has full scheduling capability
-  const reply = await callAriaChat(userMessage)
-    || await callGemini(userMessage, [], secretaryPrompt);
-  await replyLine(replyToken, reply || 'ただいま対応できません。');
+  await saveMessage(sourceId, sourceType, 'user', userMessage);
+  const history = await getHistory(sourceId);
+  const priorHistory = history.slice(0, -1);
+
+  const reply = await callAriaChat(userMessage, sourceId, priorHistory)
+    || await callGemini(userMessage, priorHistory, secretaryPrompt);
+
+  const finalReply = reply || 'ただいま対応できません。';
+  await replyLine(replyToken, finalReply);
+  if (reply) {
+    await saveMessage(sourceId, sourceType, 'assistant', reply);
+  }
 }
 
 // Handle commands from linked users' DM
@@ -256,7 +276,7 @@ async function handleCommand(replyToken, lineUserId, userMessage) {
 
   // Not linked → secretary mode
   if (!ariaUser || !ariaUser.line_command_enabled) {
-    return handleSecretaryChat(replyToken, userMessage);
+    return handleSecretaryChat(replyToken, lineUserId, 'user', userMessage);
   }
 
   const ariaUserId = ariaUser.id;
@@ -281,13 +301,16 @@ async function handleCommand(replyToken, lineUserId, userMessage) {
   }
 
   // ── それ以外は全部ARIAに任せる ──
-  const ariaReply = await callAriaChat(userMessage);
-  if (ariaReply) {
-    await replyLine(replyToken, ariaReply);
-  } else {
-    const history = await getHistory(ariaUserId.toString());
-    const geminiReply = await callGemini(userMessage, history);
-    await replyLine(replyToken, geminiReply || 'ただいま応答できません。');
+  const sessionId = ariaUserId.toString();
+  await saveMessage(sessionId, 'user', 'user', userMessage);
+  const history = await getHistory(sessionId);
+  const priorHistory = history.slice(0, -1);
+
+  const ariaReply = await callAriaChat(userMessage, sessionId, priorHistory);
+  const finalReply = ariaReply || await callGemini(userMessage, priorHistory);
+  await replyLine(replyToken, finalReply || 'ただいま応答できません。');
+  if (finalReply) {
+    await saveMessage(sessionId, 'user', 'assistant', finalReply);
   }
 }
 
@@ -325,11 +348,14 @@ async function handleTextMessage(event) {
   // Save user message
   await saveMessage(sourceId, source.type, 'user', userMessage);
 
+  // Load history (excluding the just-saved current message)
+  const history = await getHistory(sourceId);
+  const priorHistory = history.slice(0, -1);
+
   // Try ARIA chat first, fall back to Gemini
-  let aiResponse = await callAriaChat(userMessage);
+  let aiResponse = await callAriaChat(userMessage, sourceId, priorHistory);
   if (!aiResponse) {
-    const history = await getHistory(sourceId);
-    aiResponse = await callGemini(userMessage, history);
+    aiResponse = await callGemini(userMessage, priorHistory);
   }
 
   if (aiResponse) {
