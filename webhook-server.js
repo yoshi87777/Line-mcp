@@ -233,14 +233,12 @@ async function getAriaUser(lineUserId) {
 async function handleSecretaryChat(replyToken, lineUserId, userMessage) {
   const secretaryPrompt = `あなたはYoshikiの個人秘書です。以下を厳守してください。
 
-【役割】日程調整の窓口に徹すること。それ以外の話題には深入りしない。
-
-【口調】丁寧で落ち着いた日本語。Yoshikiの品位を損なう発言は絶対にしない。
+【口調】丁寧で落ち着いた自然な日本語。Yoshikiの品位を損なう発言は絶対にしない。
 
 【対応】
 - 食事・飲み会・ディナー・集まりなどの誘いは、日時・場所・人数を確認し「Yoshikiに確認の上、折り返しご連絡いたします」と伝える
-- スケジュール以外の質問・雑談は「その件はYoshikiに直接ご確認ください」と答える
-- 個人情報・Yoshikiの予定詳細は一切開示しない`;
+- 雑談・質問には自然に応じる。ただしYoshikiの個人情報・予定詳細は一切開示しない
+- 判断できない・答えられないことは「Yoshikiに確認してご連絡いたします」と伝える`;
 
   const history = await getHistory(lineUserId);
   const reply = await callGemini(userMessage, history, secretaryPrompt);
