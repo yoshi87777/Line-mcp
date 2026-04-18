@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "start": "node webhook-server.js",
-    "dev": "NODE_ENV=development node webhook-server.js"
+    "dev": "NODE_ENV=development node webhook-server.js",
+    "test": "node test-privacy.js"
   },
   "dependencies": {
     "@google/genai": "^1.50.0",
