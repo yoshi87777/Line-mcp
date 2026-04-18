@@ -229,8 +229,8 @@ async function getAriaUser(lineUserId) {
   return created;
 }
 
-// Secretary conversation for non-linked users
-async function handleSecretaryChat(replyToken, userMessage) {
+// Secretary conversation for non-linked users (Gemini only, never ARIA)
+async function handleSecretaryChat(replyToken, lineUserId, userMessage) {
   const secretaryPrompt = `あなたはYoshikiの個人秘書「ARIA」です。以下を厳守してください。
 
 【口調・品位】
@@ -240,13 +240,11 @@ async function handleSecretaryChat(replyToken, userMessage) {
 
 【対応方針】
 - 食事・飲み会・ディナーなどの誘いは「Yoshikiのスケジュールを確認の上、折り返しご連絡いたします」と伝え、日時・場所の詳細を確認する
-- 日時が決まった場合はスケジュールに登録し、確認済みと伝える
 - 伝言・要件は「Yoshikiにお伝えいたします」と答える
 - 答えられない・判断できない場合は「Yoshikiに確認してご連絡いたします」と伝える`;
 
-  // ARIA /chat has full scheduling capability
-  const reply = await callAriaChat(userMessage)
-    || await callGemini(userMessage, [], secretaryPrompt);
+  const history = await getHistory(lineUserId);
+  const reply = await callGemini(userMessage, history, secretaryPrompt);
   await replyLine(replyToken, reply || 'ただいま対応できません。');
 }
 
@@ -254,9 +252,9 @@ async function handleSecretaryChat(replyToken, userMessage) {
 async function handleCommand(replyToken, lineUserId, userMessage) {
   const ariaUser = await getAriaUser(lineUserId);
 
-  // Not linked → secretary mode
+  // Not linked → secretary mode (Gemini only, not ARIA)
   if (!ariaUser || !ariaUser.line_command_enabled) {
-    return handleSecretaryChat(replyToken, userMessage);
+    return handleSecretaryChat(replyToken, lineUserId, userMessage);
   }
 
   const ariaUserId = ariaUser.id;
