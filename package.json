@@ -5,9 +5,11 @@
   "scripts": {
     "start": "node webhook-server.js",
     "dev": "NODE_ENV=development node webhook-server.js",
-    "test": "node test-privacy.js"
+    "test": "node test-privacy.js && node test-behavior.js",
+    "test:llm": "node test-llm.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.90.0",
     "@google/genai": "^1.50.0",
     "@line/bot-sdk": "^11.0.0",
     "@supabase/supabase-js": "^2.103.3",
