@@ -108,12 +108,27 @@ async function getHistory(sourceId) {
   return (data || []).reverse();
 }
 
-// Call ARIA conversation API (primary)
-async function callAriaChat(userMessage) {
+// Call ARIA conversation API — scoped to a specific ARIA user's conversation
+async function callAriaChat(ariaUserId, userMessage) {
   try {
+    // Get the user's stored conversation_id
+    const { data: user } = await supabase
+      .from('users')
+      .select('aria_conversation_id')
+      .eq('id', ariaUserId)
+      .single();
+
+    const body = {
+      message: userMessage,
+      context: '必ず日本語で回答してください。',
+    };
+    if (user?.aria_conversation_id) {
+      body.conversation_id = user.aria_conversation_id;
+    }
+
     const res = await axios.post(
       `${ARIA_API_URL}/chat`,
-      { message: userMessage, context: '必ず日本語で回答してください。' },
+      body,
       {
         headers: {
           'Content-Type': 'application/json',
@@ -122,9 +137,17 @@ async function callAriaChat(userMessage) {
         timeout: 30000,
       }
     );
+
     const reply = res.data?.reply?.trim();
+    const convId = res.data?.conversation_id;
+
+    // Save conversation_id if new
+    if (convId && convId !== user?.aria_conversation_id) {
+      await supabase.from('users').update({ aria_conversation_id: convId }).eq('id', ariaUserId);
+    }
+
     if (reply) {
-      console.log(`ARIA chat OK (${reply.length} chars)`);
+      console.log(`ARIA chat OK user=${ariaUserId} conv=${convId} (${reply.length} chars)`);
       return reply;
     }
   } catch (err) {
@@ -280,8 +303,8 @@ async function handleCommand(replyToken, lineUserId, userMessage) {
     return;
   }
 
-  // ── それ以外は全部ARIAに任せる ──
-  const ariaReply = await callAriaChat(userMessage);
+  // ── それ以外は全部ARIAに任せる（ariaUserIdで会話スコープ固定） ──
+  const ariaReply = await callAriaChat(ariaUserId, userMessage);
   if (ariaReply) {
     await replyLine(replyToken, ariaReply);
   } else {
