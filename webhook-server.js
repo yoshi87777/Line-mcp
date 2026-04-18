@@ -252,18 +252,60 @@ async function getAriaUser(lineUserId) {
   return created;
 }
 
+// Try to extract schedule info from conversation and register it
+async function tryRegisterSchedule(lineUserId, userMessage, history) {
+  const allMessages = [...history.map(h => `${h.role === 'user' ? '相手' : '秘書'}: ${h.message}`), `相手: ${userMessage}`].join('\n');
+  const extractPrompt = `以下の会話から日程調整の情報を抽出してください。
+日時・場所・内容が全て揃っている場合のみ、以下のJSON形式で返してください。揃っていない場合は "null" とだけ返してください。
+{"title": "イベント名", "date": "YYYY-MM-DD", "start_time": "HH:MM", "end_time": "HH:MM", "location": "場所"}
+
+会話:
+${allMessages}`;
+
+  const extracted = await callGemini(extractPrompt, [], null);
+  if (!extracted || extracted.trim() === 'null') return false;
+
+  try {
+    const info = JSON.parse(extracted.trim());
+    if (!info?.date || !info?.title) return false;
+
+    const titleWithLocation = info.location ? `${info.title}（${info.location}）` : info.title;
+    await supabase.from('scheduled_events').insert({
+      title: titleWithLocation,
+      event_date: info.date,
+      start_time: info.start_time || null,
+      end_time: info.end_time || null,
+      type: 'social',
+      source: `line_dm:${lineUserId}`,
+    });
+    console.log(`[Secretary] Registered schedule: ${info.title} on ${info.date}`);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 // Secretary conversation for non-linked users (Gemini only, never ARIA)
 async function handleSecretaryChat(replyToken, lineUserId, userMessage) {
   const secretaryPrompt = `あなたはYoshikiの個人秘書です。以下を厳守してください。
 
 【口調】丁寧で落ち着いた自然な日本語。Yoshikiの品位を損なう発言は絶対にしない。
 
-【対応】
-- 食事・飲み会・ディナー・集まりなどの誘いは、日時・場所・人数を確認し「Yoshikiに確認の上、折り返しご連絡いたします」と伝える
-- 雑談・質問には自然に応じる。ただしYoshikiの個人情報・予定詳細は一切開示しない
-- 判断できない・答えられないことは「Yoshikiに確認してご連絡いたします」と伝える`;
+【会話】
+- 雑談・質問には自然に応じる
+- Yoshikiの個人情報・予定の詳細は一切開示しない
+- 判断できないことは「Yoshikiに確認してご連絡いたします」と伝える
+
+【スケジュール調整】
+- 食事・飲み会・ディナー・集まりの誘いがあれば、日時・場所・内容を自然に確認する
+- 日時・場所が揃ったら「Yoshikiのスケジュールに仮登録いたします。確認後にご連絡いたします」と伝える
+- 情報が揃っていない場合は引き続き確認する`;
 
   const history = await getHistory(lineUserId);
+
+  // Try to register schedule if info is complete
+  await tryRegisterSchedule(lineUserId, userMessage, history);
+
   const reply = await callGemini(userMessage, history, secretaryPrompt);
   await replyLine(replyToken, reply || 'ただいま対応できません。');
 }
