@@ -231,17 +231,16 @@ async function getAriaUser(lineUserId) {
 
 // Secretary conversation for non-linked users (Gemini only, never ARIA)
 async function handleSecretaryChat(replyToken, lineUserId, userMessage) {
-  const secretaryPrompt = `あなたはYoshikiの個人秘書「ARIA」です。以下を厳守してください。
+  const secretaryPrompt = `あなたはYoshikiの個人秘書です。以下を厳守してください。
 
-【口調・品位】
-- 丁寧で落ち着いた日本語で話す。関西弁は使わない
-- Yoshikiの品位・評判を傷つけるような発言は絶対にしない
-- 曖昧・軽率な返答を避け、誠実かつプロフェッショナルに対応する
+【役割】日程調整の窓口に徹すること。それ以外の話題には深入りしない。
 
-【対応方針】
-- 食事・飲み会・ディナーなどの誘いは「Yoshikiのスケジュールを確認の上、折り返しご連絡いたします」と伝え、日時・場所の詳細を確認する
-- 伝言・要件は「Yoshikiにお伝えいたします」と答える
-- 答えられない・判断できない場合は「Yoshikiに確認してご連絡いたします」と伝える`;
+【口調】丁寧で落ち着いた日本語。Yoshikiの品位を損なう発言は絶対にしない。
+
+【対応】
+- 食事・飲み会・ディナー・集まりなどの誘いは、日時・場所・人数を確認し「Yoshikiに確認の上、折り返しご連絡いたします」と伝える
+- スケジュール以外の質問・雑談は「その件はYoshikiに直接ご確認ください」と答える
+- 個人情報・Yoshikiの予定詳細は一切開示しない`;
 
   const history = await getHistory(lineUserId);
   const reply = await callGemini(userMessage, history, secretaryPrompt);
@@ -250,11 +249,16 @@ async function handleSecretaryChat(replyToken, lineUserId, userMessage) {
 
 // Handle commands from linked users' DM
 async function handleCommand(replyToken, lineUserId, userMessage) {
-  const ariaUser = await getAriaUser(lineUserId);
-
-  // Not linked → secretary mode (Gemini only, not ARIA)
-  if (!ariaUser || !ariaUser.line_command_enabled) {
+  // Hard lock: only Yoshiki's LINE ID can access ARIA
+  if (lineUserId !== YOSHIKI_USER_ID) {
+    console.log(`[BLOCKED] Non-Yoshiki DM from ${lineUserId} → secretary mode`);
     return handleSecretaryChat(replyToken, lineUserId, userMessage);
+  }
+
+  const ariaUser = await getAriaUser(lineUserId);
+  if (!ariaUser) {
+    await replyLine(replyToken, 'エラーが発生しました。');
+    return;
   }
 
   const ariaUserId = ariaUser.id;
@@ -323,12 +327,9 @@ async function handleTextMessage(event) {
   // Save user message
   await saveMessage(sourceId, source.type, 'user', userMessage);
 
-  // Try ARIA chat first, fall back to Gemini
-  let aiResponse = await callAriaChat(userMessage);
-  if (!aiResponse) {
-    const history = await getHistory(sourceId);
-    aiResponse = await callGemini(userMessage, history);
-  }
+  // Group chats: Gemini only (never ARIA — privacy)
+  const history = await getHistory(sourceId);
+  const aiResponse = await callGemini(userMessage, history);
 
   if (aiResponse) {
     await replyLine(replyToken, aiResponse);
